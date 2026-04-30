@@ -40,7 +40,7 @@ This work appeared at ICLR 2024. The paper can be cited as follows:
 @inproceedings{todd2024function,
     title={Function Vectors in Large Language Models}, 
     author={Eric Todd and Millicent L. Li and Arnab Sen Sharma and Aaron Mueller and Byron C. Wallace and David Bau},
-    booktitle={Proceedings of the 2024 International Conference on Learning Representations},
+    booktitle={The Twelfth International Conference on Learning Representations},
     url={https://openreview.net/forum?id=AwyxtyMwaG},
     note={arXiv:2310.15213},
     year={2024},
