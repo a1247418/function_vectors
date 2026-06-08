@@ -212,8 +212,8 @@ python eval_scripts/summarize_numheads.py --results_root ../results --model_nick
 ```
 Prints a n_heads × dataset accuracy table with the best n_heads highlighted, and saves to `results/<model_nick>_numheads_summary.txt`.
 
-## Citing our work
-This work appeared at ICLR 2024. The paper can be cited as follows:
+## Citing the original work
+The paper by Todd et al. appeared at ICLR 2024 and can be cited as follows:
 
 ```bibtex
 @inproceedings{todd2024function,
