@@ -70,19 +70,19 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     # For every layer, head, token combination perform the replacement & track the change in meaningful tokens
     for layer in range(model_config['n_layers']):
         head_hook_layer = [model_config['attn_hook_names'][layer]]
-        
+
         for head_n in range(model_config['n_heads']):
             for i,(token_class, class_regex) in enumerate(zip(token_classes, token_classes_regex)):
                 reg_class_match = re.compile(f"^{class_regex}$")
                 class_token_inds = [x[0] for x in token_labels if reg_class_match.match(x[2])]
 
                 intervention_locations = [(layer, head_n, token_n) for token_n in class_token_inds]
-                intervention_fn = replace_activation_w_avg(layer_head_token_pairs=intervention_locations, avg_activations=avg_activations, 
+                intervention_fn = replace_activation_w_avg(layer_head_token_pairs=intervention_locations, avg_activations=avg_activations,
                                                            model=model, model_config=model_config,
                                                            batched_input=False, idx_map=idx_map, last_token_only=last_token_only)
-                with TraceDict(model, layers=head_hook_layer, edit_output=intervention_fn) as td:                
+                with TraceDict(model, layers=head_hook_layer, edit_output=intervention_fn) as td:
                     output = model(**inputs).logits[:,-1,:] # batch_size x n_tokens x vocab_size, only want last token prediction
-                
+
                 # TRACK probs of tokens of interest
                 intervention_probs = torch.softmax(output, dim=-1) # convert to probability distribution
                 indirect_effect_storage[layer,head_n,i] = (intervention_probs-clean_probs).index_select(1, torch.LongTensor(token_id_of_interest).to(device).squeeze()).squeeze()

@@ -107,12 +107,25 @@ def fv_to_vocab(function_vector, model, model_config, tokenizer, n_tokens=10):
     decoded_tokens: list of tuples of the form [(token, probability), ...]
     """
 
-    if 'gpt-j' in model_config['name_or_path']:
+    _name = model_config['name_or_path'].lower()
+    if 'gpt-j' in _name:
         decoder = torch.nn.Sequential(model.transformer.ln_f, model.lm_head, torch.nn.Softmax(dim=-1))
-    elif 'llama' in model_config['name_or_path']:
+    elif 'gpt2-xl' in _name:
+        decoder = torch.nn.Sequential(model.transformer.ln_f, model.lm_head, torch.nn.Softmax(dim=-1))
+    elif 'gpt-neox' in _name or 'pythia' in _name:
+        decoder = torch.nn.Sequential(model.gpt_neox.final_layer_norm, model.embed_out, torch.nn.Softmax(dim=-1))
+    elif 'llama' in _name or 'olmo' in _name or 'qwen' in _name:
         decoder = torch.nn.Sequential(model.model.norm, model.lm_head, torch.nn.Softmax(dim=-1))
+    elif 'gemma' in _name:
+        if hasattr(model, 'language_model'):
+            norm = model.language_model.model.norm
+            lm_head = model.language_model.lm_head
+        else:
+            norm = model.model.norm
+            lm_head = model.lm_head
+        decoder = torch.nn.Sequential(norm, lm_head, torch.nn.Softmax(dim=-1))
     else:
-        raise ValueError("Model not yet supported")
+        raise ValueError(f"fv_to_vocab not implemented for model: {model_config['name_or_path']}")
     
     d_out = decoder(function_vector.reshape(1,1,model_config['resid_dim']).to(model.device))
 

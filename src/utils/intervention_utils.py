@@ -36,14 +36,15 @@ def replace_activation_w_avg(layer_head_token_pairs, avg_activations, model, mod
     edit_layers = [x[0] for x in layer_head_token_pairs]
 
     def rep_act(output, layer_name, inputs):
-        current_layer = int(layer_name.split('.')[2])
-        if current_layer in edit_layers:    
+        current_layer = next(int(p) for p in layer_name.split('.') if p.isdigit())
+        if current_layer in edit_layers:
             if isinstance(inputs, tuple):
                 inputs = inputs[0]
-            
+            avg_activations_cast = avg_activations.to(device=inputs.device, dtype=inputs.dtype)
+
             # Determine shapes for intervention
             original_shape = inputs.shape
-            new_shape = inputs.size()[:-1] + (model_config['n_heads'], model_config['resid_dim']//model_config['n_heads']) # split by head: + (n_attn_heads, hidden_size/n_attn_heads)
+            new_shape = inputs.size()[:-1] + (model_config['n_heads'], model_config['head_dim'])
             inputs = inputs.view(*new_shape) # inputs shape: (batch_size , tokens (n), heads, hidden_dim)
             
             # Perform Intervention:
@@ -51,43 +52,46 @@ def replace_activation_w_avg(layer_head_token_pairs, avg_activations, model, mod
             # Patch activations from avg activations into baseline sentences (i.e. n_head baseline sentences being modified in this case)
                 for i in range(model_config['n_heads']):
                     layer, head_n, token_n = layer_head_token_pairs[i]
-                    inputs[i, token_n, head_n] = avg_activations[layer, head_n, idx_map[token_n]]
+                    inputs[i, token_n, head_n] = avg_activations_cast[layer, head_n, idx_map[token_n]]
             elif last_token_only:
             # Patch activations only at the last token for interventions like
                 for (layer,head_n,token_n) in layer_head_token_pairs:
                     if layer == current_layer:
-                        inputs[-1,-1,head_n] = avg_activations[layer,head_n,idx_map[token_n]]
+                        inputs[-1,-1,head_n] = avg_activations_cast[layer,head_n,idx_map[token_n]]
             else:
             # Patch activations into baseline sentence found at index, -1 of the batch (targeted & multi-token patching)
                 for (layer, head_n, token_n) in layer_head_token_pairs:
                     if layer == current_layer:
-                        inputs[-1, token_n, head_n] = avg_activations[layer,head_n,idx_map[token_n]]
-            
+                        inputs[-1, token_n, head_n] = avg_activations_cast[layer,head_n,idx_map[token_n]]
+
             inputs = inputs.view(*original_shape)
             proj_module = get_module(model, layer_name)
             out_proj = proj_module.weight
 
-            if 'gpt2-xl' in model_config['name_or_path']: # GPT2-XL uses Conv1D (not nn.Linear) & has a bias term, GPTJ does not
+            _name = model_config['name_or_path'].lower()
+            if 'gpt2-xl' in _name: # GPT2-XL uses Conv1D (not nn.Linear) & has a bias term, GPTJ does not
                 out_proj_bias = proj_module.bias
                 new_output = torch.addmm(out_proj_bias, inputs.squeeze(), out_proj)
-                
-            elif 'gpt-j' in model_config['name_or_path'] or 'gemma' in model_config['name_or_path']:
+
+            elif 'gpt-j' in _name or 'gemma' in _name:
                 new_output = torch.matmul(inputs, out_proj.T)
 
-            elif 'gpt-neox' in model_config['name_or_path'] or 'pythia' in model_config['name_or_path']:
+            elif 'gpt-neox' in _name or 'pythia' in _name:
                 out_proj_bias = proj_module.bias
                 new_output = torch.addmm(out_proj_bias, inputs.squeeze(), out_proj.T)
-            
-            elif 'llama' in model_config['name_or_path']:
-                if '70b' in model_config['name_or_path']:
-                    # need to dequantize weights
+
+            elif 'llama' in _name:
+                if '70b' in _name:
                     out_proj_dequant = bnb.functional.dequantize_4bit(out_proj.data, out_proj.quant_state)
                     new_output = torch.matmul(inputs, out_proj_dequant.T)
                 else:
                     new_output = torch.matmul(inputs, out_proj.T)
-            
-            elif 'olmo' in model_config['name_or_path'].lower():
+
+            elif 'olmo' in _name or 'qwen' in _name:
                 new_output = torch.matmul(inputs, out_proj.T)
+
+            else:
+                raise NotImplementedError(f"replace_activation_w_avg not implemented for model: {model_config['name_or_path']}")
 
             return new_output
         else:
@@ -109,12 +113,13 @@ def add_function_vector(edit_layer, fv_vector, device, idx=-1):
     add_act: a fuction specifying how to add a function vector to a layer's output hidden state
     """
     def add_act(output, layer_name):
-        current_layer = int(layer_name.split(".")[2])
+        current_layer = next(int(p) for p in layer_name.split('.') if p.isdigit())
         if current_layer == edit_layer:
             if isinstance(output, tuple):
-                output[0][:, idx] += fv_vector.to(device)
+                output[0][:, idx] += fv_vector.to(device).to(output[0].dtype)
                 return output
             else:
+                output[:, idx] += fv_vector.to(device).to(output.dtype)
                 return output
         else:
             return output
@@ -250,59 +255,63 @@ def add_avg_to_activation(layer_head_token_pairs, avg_activations, model, model_
     device = model.device
 
     def add_act(output, layer_name, inputs):
-        current_layer = int(layer_name.split('.')[2])
-        if current_layer in edit_layers:    
+        current_layer = next(int(p) for p in layer_name.split('.') if p.isdigit())
+        if current_layer in edit_layers:
             if isinstance(inputs, tuple):
                 inputs = inputs[0]
-            
+            avg_activations_cast = avg_activations.to(device=inputs.device, dtype=inputs.dtype)
+
             # Determine shapes for intervention
             original_shape = inputs.shape
-            new_shape = inputs.size()[:-1] + (model_config['n_heads'], model_config['resid_dim']//model_config['n_heads']) # split by head: + (n_attn_heads, hidden_size/n_attn_heads)
+            new_shape = inputs.size()[:-1] + (model_config['n_heads'], model_config['head_dim'])
             inputs = inputs.view(*new_shape) # inputs shape: (batch_size , tokens (n), heads, hidden_dim)
-            
+
             # Perform Intervention:
             if batched_input:
             # Patch activations from avg activations into baseline sentences (i.e. n_head baseline sentences being modified in this case)
                 for i in range(model_config['n_heads']):
                     layer, head_n, token_n = layer_head_token_pairs[i]
-                    inputs[i, token_n, head_n] += avg_activations[layer, head_n, token_n].to(device)
+                    inputs[i, token_n, head_n] += avg_activations_cast[layer, head_n, token_n]
             elif last_token_only:
             # Patch activations only at the last token for interventions like: (zero-shot, concept-naming, etc.)
                 for (layer,head_n,token_n) in layer_head_token_pairs:
                     if layer == current_layer:
-                        inputs[-1,-1,head_n] += avg_activations[layer,head_n,token_n].to(device)
+                        inputs[-1,-1,head_n] += avg_activations_cast[layer,head_n,token_n]
             else:
             # Patch activations into baseline sentence found at index, -1 of the batch (targeted & multi-token patching)
                 for (layer, head_n, token_n) in layer_head_token_pairs:
                     if layer == current_layer:
-                        inputs[-1, token_n, head_n] += avg_activations[layer,head_n,token_n].to(device)
+                        inputs[-1, token_n, head_n] += avg_activations_cast[layer,head_n,token_n]
             
             inputs = inputs.view(*original_shape)
             proj_module = get_module(model, layer_name)
             out_proj = proj_module.weight
 
-            if 'gpt2-xl' in model_config['name_or_path']: # GPT2-XL uses Conv1D (not nn.Linear) & has a bias term, GPTJ does not
+            _name = model_config['name_or_path'].lower()
+            if 'gpt2-xl' in _name: # GPT2-XL uses Conv1D (not nn.Linear) & has a bias term, GPTJ does not
                 out_proj_bias = proj_module.bias
                 new_output = torch.addmm(out_proj_bias, inputs.squeeze(), out_proj)
 
-            elif 'gpt-j' in model_config['name_or_path'] or 'gemma' in model_config['name_or_path']:
+            elif 'gpt-j' in _name or 'gemma' in _name:
                 new_output = torch.matmul(inputs, out_proj.T)
 
-            elif 'gpt-neox' in model_config['name_or_path'] or 'pythia' in model_config['name_or_path']:
+            elif 'gpt-neox' in _name or 'pythia' in _name:
                 out_proj_bias = proj_module.bias
                 new_output = torch.addmm(out_proj_bias, inputs.squeeze(), out_proj.T)
-            
-            elif 'llama' in model_config['name_or_path']:
-                if '70b' in model_config['name_or_path']:
-                    # need to dequantize weights
+
+            elif 'llama' in _name:
+                if '70b' in _name:
                     out_proj_dequant = bnb.functional.dequantize_4bit(out_proj.data, out_proj.quant_state)
                     new_output = torch.matmul(inputs, out_proj_dequant.T)
                 else:
                     new_output = torch.matmul(inputs, out_proj.T)
-            
-            elif 'olmo' in model_config['name_or_path'].lower():
+
+            elif 'olmo' in _name or 'qwen' in _name:
                 new_output = torch.matmul(inputs, out_proj.T)
-            
+
+            else:
+                raise NotImplementedError(f"add_avg_to_activation not implemented for model: {model_config['name_or_path']}")
+
             return new_output
         else:
             return output

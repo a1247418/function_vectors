@@ -63,8 +63,8 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
     mean_activations: avg activation of each attention head in the model taken across n_trials ICL prompts
     """
     def split_activations_by_head(activations, model_config):
-        new_shape = activations.size()[:-1] + (model_config['n_heads'], model_config['resid_dim']//model_config['n_heads']) # split by head: + (n_attn_heads, hidden_size/n_attn_heads)
-        activations = activations.view(*new_shape)  # (batch_size, n_tokens, n_heads, head_hidden_dim)
+        new_shape = activations.size()[:-1] + (model_config['n_heads'], model_config['head_dim'])
+        activations = activations.view(*new_shape)  # (batch_size, n_tokens, n_heads, head_dim)
         return activations
     
     n_test_examples = 1
@@ -72,7 +72,7 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
         dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, prefixes=prefixes, separators=separators, model_config=model_config)
     else:
         dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, model_config=model_config)
-    activation_storage = torch.zeros(N_TRIALS, model_config['n_layers'], model_config['n_heads'], len(dummy_labels), model_config['resid_dim']//model_config['n_heads'])
+    activation_storage = torch.zeros(N_TRIALS, model_config['n_layers'], model_config['n_heads'], len(dummy_labels), model_config['head_dim'])
 
     if filter_set is None:
         filter_set = np.arange(len(dataset['valid']))
@@ -320,7 +320,7 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
     """
     model_resid_dim = model_config['resid_dim']
     model_n_heads = model_config['n_heads']
-    model_head_dim = model_resid_dim//model_n_heads
+    model_head_dim = model_config['head_dim']
     device = model.device
 
     li_dims = len(indirect_effect.shape)
@@ -340,23 +340,35 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
     # Compute Function Vector as sum of influential heads
     function_vector = torch.zeros((1,1,model_resid_dim)).to(device)
     T = -1 # Intervention & values taken from last token
+    attn_dim = model_n_heads * model_head_dim  # may differ from resid_dim (e.g. Gemma-3)
 
     for L,H,_ in top_heads:
-        if 'gpt2-xl' in model_config['name_or_path']:
+        _name = model_config['name_or_path'].lower()
+        if 'gpt2-xl' in _name:
             out_proj = model.transformer.h[L].attn.c_proj
-        elif 'gpt-j' in model_config['name_or_path']:
+        elif 'gpt-j' in _name:
             out_proj = model.transformer.h[L].attn.out_proj
-        elif 'llama' in model_config['name_or_path'] or 'gemma' in model_config['name_or_path'] or 'olmo' in model_config['name_or_path'].lower():
+        elif 'llama' in _name or 'olmo' in _name or 'qwen' in _name:
             out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'gpt-neox' in model_config['name_or_path'] or 'pythia' in model_config['name_or_path']:
+        elif 'gemma' in _name:
+            if hasattr(model, 'language_model'):
+                _layers = model.language_model.model.layers
+            elif hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+                _layers = model.model.language_model.layers
+            else:
+                _layers = model.model.layers
+            out_proj = _layers[L].self_attn.o_proj
+        elif 'gpt-neox' in _name or 'pythia' in _name:
             out_proj = model.gpt_neox.layers[L].attention.dense
+        else:
+            raise NotImplementedError(f"compute_function_vector not implemented for model: {model_config['name_or_path']}")
 
-        x = torch.zeros(model_resid_dim)
+        x = torch.zeros(attn_dim)
         x[H*model_head_dim:(H+1)*model_head_dim] = mean_activations[L,H,T]
-        d_out = out_proj(x.reshape(1,1,model_resid_dim).to(device).to(model.dtype))
+        d_out = out_proj(x.reshape(1,1,attn_dim).to(device).to(model.dtype))
 
         function_vector += d_out
-    
+
     function_vector = function_vector.to(model.dtype)
     function_vector = function_vector.reshape(1, model_resid_dim)
 
@@ -379,7 +391,7 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
     """
     model_resid_dim = model_config['resid_dim']
     model_n_heads = model_config['n_heads']
-    model_head_dim = model_resid_dim//model_n_heads
+    model_head_dim = model_config['head_dim']
     device = model.device
 
     # Universal Set of Heads
@@ -439,6 +451,39 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (16, 0, 0.0004), (20, 19, 0.0004), (44, 57, 0.0004), (40, 34, 0.0004), (79, 25, 0.0004), (69, 27, 0.0004), (76, 26, 0.0004), (26, 30, 0.0004), (72, 31, 0.0004), (26, 29, 0.0004),
                      (55, 15, 0.0004), (33, 58, 0.0004), (18, 25, 0.0004), (25, 2, 0.0004), (33, 27, 0.0004), (20, 40, 0.0004), (24, 27, 0.0004), (17, 3, 0.0004), (18, 62, 0.0004), (47, 7, 0.0004),
                      (33, 28, 0.0004), (31, 11, 0.0004), (24, 28, 0.0004), (37, 7, 0.0004), (40, 7, 0.0004), (32, 61, 0.0004)]
+    elif 'Llama-3.2-3B-Instruct' in model_config['name_or_path']:
+        top_heads = [(12, 20, 0.2284), (14, 12, 0.0907), (14, 1, 0.0718), (15, 4, 0.0251), (17, 17, 0.022), (19, 7, 0.0175), (12, 3, 0.0148), (14, 14, 0.0139), (15, 7, 0.0117), (16, 21, 0.009),
+                     (14, 6, 0.0089), (17, 2, 0.0081), (9, 19, 0.0077), (13, 23, 0.0074), (10, 22, 0.0072), (15, 9, 0.0072), (13, 6, 0.0068), (13, 14, 0.0068), (14, 5, 0.0065), (13, 8, 0.0059),
+                     (12, 17, 0.0056), (26, 23, 0.0054), (12, 16, 0.0052), (12, 23, 0.0052), (14, 15, 0.0051), (13, 15, 0.0048), (24, 21, 0.0047), (19, 1, 0.0044), (10, 23, 0.0042), (27, 11, 0.0039),
+                     (22, 17, 0.0036), (15, 18, 0.0035), (27, 17, 0.0035), (27, 9, 0.0034), (8, 2, 0.0033), (12, 2, 0.0033), (16, 15, 0.0033), (18, 6, 0.0033), (6, 1, 0.0032), (13, 4, 0.0031),
+                     (14, 2, 0.0031), (14, 0, 0.0029), (16, 9, 0.0028), (17, 9, 0.0028), (14, 22, 0.0026), (18, 20, 0.0026), (9, 12, 0.0023), (19, 6, 0.0022), (19, 8, 0.0022), (26, 19, 0.0021),
+                     (13, 2, 0.002), (27, 18, 0.002), (11, 2, 0.0019), (11, 21, 0.0019), (13, 11, 0.0019), (24, 5, 0.0018), (26, 14, 0.0018), (15, 12, 0.0015), (13, 19, 0.0014), (21, 14, 0.0014),
+                     (24, 2, 0.0014), (26, 13, 0.0014), (10, 12, 0.0013), (16, 17, 0.0013), (20, 15, 0.0013), (27, 7, 0.0013), (13, 3, 0.0012), (21, 16, 0.0012), (23, 13, 0.0012), (24, 1, 0.0012),
+                     (9, 16, 0.0011), (17, 0, 0.0011), (19, 3, 0.0011), (23, 2, 0.0011), (26, 5, 0.0011), (26, 6, 0.0011), (12, 22, 0.001), (15, 8, 0.001), (16, 22, 0.001), (20, 16, 0.001),
+                     (10, 4, 0.0009), (11, 7, 0.0009), (11, 16, 0.0009), (13, 10, 0.0009), (17, 11, 0.0009), (23, 23, 0.0009), (24, 16, 0.0009), (26, 9, 0.0009), (6, 21, 0.0008), (10, 0, 0.0008),
+                     (10, 1, 0.0008), (14, 8, 0.0008), (18, 19, 0.0008), (21, 12, 0.0008), (22, 14, 0.0008), (24, 3, 0.0008), (10, 15, 0.0007), (11, 9, 0.0007), (13, 0, 0.0007), (14, 11, 0.0007)]
+    elif 'gemma-3-4b-it' in model_config['name_or_path']:
+        top_heads = [(17, 4, 0.2147), (17, 6, 0.1366), (13, 2, 0.0944), (22, 3, 0.0717), (17, 5, 0.0542), (11, 0, 0.04), (18, 7, 0.0383), (30, 4, 0.0352), (11, 4, 0.032), (16, 4, 0.0316),
+                    (11, 1, 0.0304), (18, 1, 0.0299), (20, 7, 0.0273), (14, 6, 0.026), (30, 1, 0.0246), (16, 3, 0.0211), (18, 3, 0.0211), (16, 7, 0.0201), (22, 0, 0.0175), (32, 0, 0.0173),
+                    (15, 1, 0.0161), (14, 5, 0.0155), (15, 4, 0.0153), (20, 4, 0.0144), (27, 6, 0.0138), (23, 1, 0.0132), (16, 6, 0.013), (19, 4, 0.0122), (16, 0, 0.0119), (21, 6, 0.0116),
+                    (19, 1, 0.0115), (20, 0, 0.0115), (19, 7, 0.0109), (32, 1, 0.0108), (14, 1, 0.0106), (31, 7, 0.0096), (17, 3, 0.0092), (17, 2, 0.0087), (20, 1, 0.0087), (14, 4, 0.0086),
+                    (25, 4, 0.0085), (22, 7, 0.0082), (33, 0, 0.0074), (30, 6, 0.0071), (32, 2, 0.007), (19, 6, 0.0068), (26, 3, 0.0068), (5, 1, 0.0067), (23, 4, 0.0059), (29, 4, 0.0054),
+                    (21, 2, 0.0053), (13, 0, 0.0048), (11, 7, 0.0047), (29, 0, 0.0045), (31, 3, 0.0045), (11, 5, 0.0044), (33, 4, 0.0042), (12, 4, 0.0041), (26, 7, 0.004), (10, 7, 0.0036),
+                    (27, 1, 0.0036), (13, 4, 0.0035), (29, 3, 0.0034), (14, 0, 0.0033), (19, 2, 0.0033), (11, 2, 0.0032), (32, 5, 0.0032), (12, 2, 0.0031), (32, 4, 0.0031), (33, 2, 0.003),
+                    (11, 6, 0.0029), (12, 6, 0.0028), (24, 2, 0.0028), (21, 7, 0.0027), (31, 1, 0.0027), (9, 7, 0.0025), (21, 1, 0.0025), (26, 0, 0.0025), (27, 3, 0.0025), (33, 5, 0.0025),
+                    (17, 0, 0.0024), (20, 3, 0.0024), (31, 5, 0.0022), (24, 6, 0.0021), (5, 3, 0.0019), (28, 0, 0.0019), (5, 0, 0.0017), (15, 7, 0.0017), (29, 7, 0.0017), (24, 0, 0.0016),
+                    (25, 2, 0.0016), (13, 6, 0.0015), (33, 7, 0.0015), (9, 4, 0.0014), (28, 5, 0.0014), (8, 3, 0.0013), (10, 3, 0.0013), (28, 1, 0.0013), (29, 6, 0.0013), (32, 7, 0.0013)]
+    elif 'Qwen3-8B' in model_config['name_or_path']:
+        top_heads = [(20, 24, 0.0919), (20, 26, 0.07), (22, 30, 0.0487), (22, 21, 0.0416), (22, 13, 0.0363), (21, 1, 0.0302), (20, 22, 0.0296), (16, 21, 0.0293), (25, 12, 0.028), (22, 10, 0.0275),
+                    (20, 21, 0.0267), (22, 29, 0.0256), (25, 6, 0.0252), (23, 21, 0.0237), (22, 28, 0.0236), (25, 13, 0.0206), (35, 8, 0.0206), (19, 11, 0.0199), (22, 23, 0.0197), (20, 25, 0.0193),
+                    (25, 28, 0.0189), (33, 21, 0.0189), (25, 5, 0.0169), (24, 22, 0.0153), (22, 19, 0.0142), (23, 24, 0.0135), (22, 9, 0.0108), (20, 11, 0.0104), (27, 7, 0.0104), (26, 4, 0.0102),
+                    (33, 8, 0.01), (13, 28, 0.0099), (28, 28, 0.0098), (23, 3, 0.0092), (21, 22, 0.0088), (20, 27, 0.0085), (20, 14, 0.0084), (24, 20, 0.0082), (29, 18, 0.0079), (25, 15, 0.0077),
+                    (27, 25, 0.0075), (32, 9, 0.0071), (20, 30, 0.007), (27, 12, 0.007), (29, 16, 0.0069), (29, 4, 0.0068), (30, 5, 0.0067), (35, 9, 0.0062), (21, 14, 0.0059), (28, 1, 0.0058),
+                    (26, 0, 0.0056), (35, 24, 0.0055), (9, 24, 0.0054), (22, 1, 0.0054), (24, 28, 0.0054), (34, 12, 0.0052), (18, 3, 0.0051), (21, 6, 0.0051), (22, 24, 0.0048), (23, 2, 0.0047),
+                    (30, 10, 0.0046), (21, 21, 0.0045), (34, 29, 0.0045), (23, 29, 0.0043), (28, 30, 0.0043), (35, 2, 0.0043), (35, 17, 0.0043), (16, 20, 0.0042), (19, 26, 0.0042), (31, 30, 0.0042),
+                    (21, 13, 0.0039), (28, 23, 0.0038), (17, 11, 0.0037), (21, 0, 0.0036), (8, 16, 0.0035), (23, 31, 0.0035), (24, 12, 0.0035), (26, 2, 0.0035), (22, 12, 0.0034), (35, 27, 0.0034),
+                    (17, 10, 0.0033), (24, 11, 0.0033), (23, 6, 0.0031), (17, 20, 0.003), (21, 4, 0.003), (23, 15, 0.003), (21, 11, 0.0029), (20, 10, 0.0028), (20, 12, 0.0028), (22, 4, 0.0027),
+                    (29, 14, 0.0026), (9, 26, 0.0025), (17, 7, 0.0025), (20, 16, 0.0025), (20, 29, 0.0025), (30, 7, 0.0025), (31, 1, 0.0025), (33, 22, 0.0025), (13, 30, 0.0023), (23, 11, 0.0023)]
     elif 'gpt-neox' in model_config['name_or_path']:
         top_heads = [(9, 42, 0.0293), (12, 4, 0.0224), (9, 28, 0.019), (11, 57, 0.0079), (10, 43, 0.0073), (12, 14, 0.0069), (14, 31, 0.0065), (9, 23, 0.0057), (11, 21, 0.0054), (11, 4, 0.0052),
                      (9, 21, 0.0052), (18, 23, 0.005), (13, 9, 0.0048), (14, 49, 0.0048), (12, 20, 0.0047), (8, 30, 0.0045), (12, 59, 0.0043), (16, 42, 0.0039), (11, 34, 0.0038), (9, 33, 0.0038),
@@ -456,20 +501,32 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
     # Compute Function Vector as sum of influential heads
     function_vector = torch.zeros((1,1,model_resid_dim)).to(device)
     T = -1 # Intervention & values taken from last token
+    attn_dim = model_n_heads * model_head_dim  # may differ from resid_dim (e.g. Gemma-3)
 
     for L,H,_ in top_heads:
-        if 'gpt2-xl' in model_config['name_or_path']:
+        _name = model_config['name_or_path'].lower()
+        if 'gpt2-xl' in _name:
             out_proj = model.transformer.h[L].attn.c_proj
-        elif 'gpt-j' in model_config['name_or_path']:
+        elif 'gpt-j' in _name:
             out_proj = model.transformer.h[L].attn.out_proj
-        elif 'llama' in model_config['name_or_path']:
+        elif 'llama' in _name or 'olmo' in _name or 'qwen' in _name:
             out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'gpt-neox' in model_config['name_or_path']:
+        elif 'gpt-neox' in _name or 'pythia' in _name:
             out_proj = model.gpt_neox.layers[L].attention.dense
+        elif 'gemma' in _name:
+            if hasattr(model, 'language_model'):
+                _layers = model.language_model.model.layers
+            elif hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+                _layers = model.model.language_model.layers
+            else:
+                _layers = model.model.layers
+            out_proj = _layers[L].self_attn.o_proj
+        else:
+            raise NotImplementedError(f"compute_universal_function_vector not implemented for model: {model_config['name_or_path']}")
 
-        x = torch.zeros(model_resid_dim)
+        x = torch.zeros(attn_dim)
         x[H*model_head_dim:(H+1)*model_head_dim] = mean_activations[L,H,T]
-        d_out = out_proj(x.reshape(1,1,model_resid_dim).to(device).to(model.dtype))
+        d_out = out_proj(x.reshape(1,1,attn_dim).to(device).to(model.dtype))
 
         function_vector += d_out
         function_vector = function_vector.to(model.dtype)

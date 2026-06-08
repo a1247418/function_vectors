@@ -32,6 +32,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         MODEL_CONFIG={"n_heads":model.config.n_head,
                       "n_layers":model.config.n_layer,
                       "resid_dim":model.config.n_embd,
+                      "head_dim":model.config.n_embd // model.config.n_head,
                       "name_or_path":model.config.name_or_path,
                       "attn_hook_names":[f'transformer.h.{layer}.attn.c_proj' for layer in range(model.config.n_layer)],
                       "layer_hook_names":[f'transformer.h.{layer}' for layer in range(model.config.n_layer)],
@@ -45,6 +46,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         MODEL_CONFIG={"n_heads":model.config.n_head,
                       "n_layers":model.config.n_layer,
                       "resid_dim":model.config.n_embd,
+                      "head_dim":model.config.n_embd // model.config.n_head,
                       "name_or_path":model.config.name_or_path,
                       "attn_hook_names":[f'transformer.h.{layer}.attn.out_proj' for layer in range(model.config.n_layer)],
                       "layer_hook_names":[f'transformer.h.{layer}' for layer in range(model.config.n_layer)],
@@ -61,22 +63,36 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         MODEL_CONFIG={"n_heads":model.config.num_attention_heads,
                       "n_layers":model.config.num_hidden_layers,
                       "resid_dim": model.config.hidden_size,
+                      "head_dim":model.config.hidden_size // model.config.num_attention_heads,
                       "name_or_path":model.config.name_or_path,
                       "attn_hook_names":[f'gpt_neox.layers.{layer}.attention.dense' for layer in range(model.config.num_hidden_layers)],
-                      "layer_hook_names":[f'gpt_neox.layers.{layer}' for layer in range(model.config.num_hidden_layers)], 
+                      "layer_hook_names":[f'gpt_neox.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
                       "prepend_bos":False}
         
     elif 'gemma' in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True).to(device)
 
-        MODEL_CONFIG={"n_heads":model.config.num_attention_heads,
-                      "n_layers":model.config.num_hidden_layers,
-                      "resid_dim":model.config.hidden_size,
+        # Gemma-3 multimodal (4B+) loads as Gemma3ForConditionalGeneration: text layers at model.language_model.layers
+        # Gemma-3 1B text-only loads as Gemma3ForCausalLM: text layers at model.layers
+        # Gemma-1/2 load as GemmaForCausalLM: text layers at model.layers
+        if hasattr(model, 'language_model'):
+            _layer_prefix = 'language_model.model'
+        elif hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+            _layer_prefix = 'model.language_model'
+        else:
+            _layer_prefix = 'model'
+        _cfg = getattr(model.config, 'text_config', model.config)
+        # Gemma-3 has an explicit head_dim that differs from hidden_size / num_attention_heads
+        _head_dim = getattr(_cfg, 'head_dim', _cfg.hidden_size // _cfg.num_attention_heads)
+        MODEL_CONFIG={"n_heads":_cfg.num_attention_heads,
+                      "n_layers":_cfg.num_hidden_layers,
+                      "resid_dim":_cfg.hidden_size,
+                      "head_dim":_head_dim,
                       "name_or_path":model.config._name_or_path,
-                      "attn_hook_names":[f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
-                      "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
+                      "attn_hook_names":[f'{_layer_prefix}.layers.{layer}.self_attn.o_proj' for layer in range(_cfg.num_hidden_layers)],
+                      "layer_hook_names":[f'{_layer_prefix}.layers.{layer}' for layer in range(_cfg.num_hidden_layers)],
                       "prepend_bos":True}
         
     elif 'llama' in model_name.lower():
@@ -112,6 +128,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         MODEL_CONFIG={"n_heads":model.config.num_attention_heads,
                       "n_layers":model.config.num_hidden_layers,
                       "resid_dim":model.config.hidden_size,
+                      "head_dim":model.config.hidden_size // model.config.num_attention_heads,
                       "name_or_path":model.config._name_or_path,
                       "attn_hook_names":[f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
                       "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
@@ -128,10 +145,25 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         MODEL_CONFIG={"n_heads":model.config.num_attention_heads,
                       "n_layers":model.config.num_hidden_layers,
                       "resid_dim":model.config.hidden_size,
+                      "head_dim":model.config.hidden_size // model.config.num_attention_heads,
                       "name_or_path":model.config._name_or_path,
                       "attn_hook_names":[f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
                       "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
                       "prepend_bos":False}
+    elif 'qwen' in model_name.lower():
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True).to(device)
+
+        MODEL_CONFIG = {"n_heads":         model.config.num_attention_heads,
+                        "n_layers":        model.config.num_hidden_layers,
+                        "resid_dim":       model.config.hidden_size,
+                        "head_dim":        model.config.hidden_size // model.config.num_attention_heads,
+                        "name_or_path":    model.config._name_or_path,
+                        "attn_hook_names": [f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
+                        "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
+                        "prepend_bos":     False}
+
     else:
         raise NotImplementedError("Still working to get this model available!")
 

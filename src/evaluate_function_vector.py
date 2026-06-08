@@ -146,10 +146,41 @@ if __name__ == "__main__":
         
     # Compute Function Vector
     if universal_set:
-        fv, top_heads = compute_universal_function_vector(mean_activations, model, model_config=model_config, n_top_heads=n_top_heads)   
+        fv, top_heads = compute_universal_function_vector(mean_activations, model, model_config=model_config, n_top_heads=n_top_heads)
     else:
-        fv, top_heads = compute_function_vector(mean_activations, indirect_effect, model, model_config=model_config, n_top_heads=n_top_heads)   
-    
+        fv, top_heads = compute_function_vector(mean_activations, indirect_effect, model, model_config=model_config, n_top_heads=n_top_heads)
+
+    # --- Diagnostics ---
+    print(f"[DIAG] model class: {type(model).__name__}, has language_model: {hasattr(model, 'language_model')}")
+    print(f"[DIAG] model_config: {model_config}")
+    print(f"[DIAG] filter_set size: {len(filter_set)} / {len(dataset['test'])} test examples")
+    print(f"[DIAG] mean_activations shape: {mean_activations.shape}, norm: {mean_activations.norm().item():.4f}")
+    print(f"[DIAG] fv shape: {fv.shape}, dtype: {fv.dtype}, norm: {fv.norm().item():.6f}")
+    try:
+        fv_words = fv_to_vocab(fv, model, model_config, tokenizer, n_tokens=10)
+        print(f"[DIAG] fv_to_vocab: {fv_words}")
+    except Exception as _e:
+        print(f"[DIAG] fv_to_vocab failed: {_e}")
+    # Sanity-check: verify FV injection actually changes model output
+    _probe_layer = eval_edit_layer if isinstance(eval_edit_layer, int) else 0
+    _probe_sentence = "Q: good\nA:"
+    _probe_inputs = tokenizer(_probe_sentence, return_tensors='pt').to(device)
+    with torch.no_grad():
+        _clean_logits = model(**_probe_inputs).logits[:, -1, :]
+    _probe_fn = add_function_vector(_probe_layer, fv.reshape(1, model_config['resid_dim']), device, idx=-1)
+    with TraceDict(model, layers=model_config['layer_hook_names'], edit_output=_probe_fn):
+        with torch.no_grad():
+            _interv_logits = model(**_probe_inputs).logits[:, -1, :]
+    _diff_norm = (_interv_logits.float() - _clean_logits.float()).norm().item()
+    print(f"[DIAG] FV injection test at layer {_probe_layer}: clean vs intervened logit diff norm = {_diff_norm:.6f}")
+    if _diff_norm < 1e-6:
+        print("[DIAG] WARNING: FV injection has NO effect — hook is not firing or FV is zero!")
+    _top5 = lambda logits: [(tokenizer.decode(i), round(v.item(), 3)) for v, i in
+                            zip(*torch.topk(torch.softmax(logits[0].float(), -1), 5))]
+    print(f"[DIAG] Probe '{_probe_sentence}' clean top-5:       {_top5(_clean_logits)}")
+    print(f"[DIAG] Probe '{_probe_sentence}' intervened top-5:  {_top5(_interv_logits)}")
+    # --- End Diagnostics ---
+
     # Run Evaluation
     if isinstance(eval_edit_layer, int):
         print(f"Running ZS Eval with edit_layer={eval_edit_layer}")
