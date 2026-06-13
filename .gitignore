@@ -4,6 +4,10 @@
 __pycache__
 *__pycache__
 
+# Logs
+logs/
+**/logs/
+
 # Results and Figures
 *results
 results/*

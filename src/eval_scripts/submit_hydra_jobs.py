@@ -63,7 +63,7 @@ CLUSTERS = {
         'gpu_flag':   '--gres=gpu:1',
         'extra':      [],
         'conda_init': 'source /etc/profile.d/conda.sh',
-        'conda_env':  'function_vectors',
+        'conda_env':  'fv',
     },
 }
 
