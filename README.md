@@ -45,6 +45,7 @@ The pipeline supports the following models out of the box:
 | Pythia family | `EleutherAI/pythia-*` | |
 | Llama-2 7B/13B/70B | `meta-llama/Llama-2-*` | 70B uses 4-bit quantization; gated repo |
 | Llama-3.2 3B Instruct | `meta-llama/Llama-3.2-3B-Instruct` | gated repo |
+| Gemma-3 4B PT | `google/gemma-3-4b-pt` | gated repo |
 | Gemma-3 4B IT | `google/gemma-3-4b-it` | gated repo |
 | Qwen3 8B | `Qwen/Qwen3-8B` | |
 | OLMo | `allenai/OLMo-*` | |
@@ -120,33 +121,37 @@ python src/evaluate_function_vector.py \
 
 ## SLURM Batch Jobs
 
-`src/eval_scripts/submit_hydra_jobs.py` generates and submits all three phases as SLURM jobs. The templates are straightforward to adapt to any SLURM cluster.
+`src/eval_scripts/submit_hydra_jobs.py` generates and submits all three phases as SLURM jobs.
+
+### Cluster selection
+
+Pass `--cluster cluster_h` (default) or `--cluster cluster_c` to target the appropriate cluster. Cluster-specific settings (partition, GPU flag, conda initialisation, environment name) are defined in the `CLUSTERS` dict at the top of the script — edit them there if your setup differs.
 
 ```bash
 # Phase 1 — compute universal heads for new models (one job per model)
-python src/eval_scripts/submit_hydra_jobs.py --phase compute_heads
+python src/eval_scripts/submit_hydra_jobs.py --phase compute_heads --cluster cluster_c
 
 # Phase 2 — layer sweep for all models × datasets (one job per pair)
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep
+python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c
 
 # Phase 3 — fixed-layer eval using hardcoded L/3 defaults (no flag needed)
-python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval
+python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval --cluster cluster_c
 
 # Or override specific models after inspecting layer sweep results
-python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval \
+python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval --cluster cluster_c \
     --edit_layers gptj=9,llama32_3b=9,gemma3_4b=11,qwen3_8b=12
 
 # n_heads sweep — find the optimal number of heads per model × dataset
-python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep \
+python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep --cluster cluster_c \
     --edit_layers gemma3_4b=11 --models gemma3_4b
 
 # Dry run — print sbatch commands without submitting
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --dry_run
+python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c --dry_run
 ```
 
 Filter flags `--models` and `--datasets` accept comma-separated values and apply to all phases:
 ```bash
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep \
+python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c \
     --models gemma3_4b --datasets antonym,english-french
 ```
 
@@ -156,10 +161,11 @@ The script uses the following per-model configuration (edit `MODELS` dict to add
 |---|---|---|---|---|
 | GPT-J 6B | `gptj` | 28 | 10 | 9 |
 | Llama-3.2 3B Instruct | `llama32_3b` | 28 | 15 | 9 |
+| Gemma-3 4B PT | `gemma3_4b_pt` | 34 | 15 | 11 |
 | Gemma-3 4B IT | `gemma3_4b` | 34 | 15 | 11 |
 | Qwen3 8B | `qwen3_8b` | 36 | 25 | 12 |
 
-SLURM script templates live in `src/eval_scripts/` (`hydra_compute_heads.sh`, `hydra_layer_sweep.sh`, `hydra_fixed_eval.sh`). The driver fills in model name, dataset, and layer placeholders and writes concrete `.sh` files to a timestamped subdirectory before submitting.
+Job bodies are defined in `src/eval_scripts/tpl_*.sh`. The driver assembles the full script (SBATCH header + conda setup + body) at submission time and writes concrete `.sh` files to a timestamped subdirectory.
 
 ## Finding the Optimal Number of Heads
 
@@ -178,7 +184,7 @@ python src/test_numheads.py \
 Results are saved to `results/<model_nick>/<model_nick>_test_numheads/<dataset>_perf_v_heads.json`. Submit as SLURM jobs across all datasets with:
 
 ```bash
-python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep \
+python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep --cluster cluster_c \
     --edit_layers gemma3_4b=11 --models gemma3_4b
 ```
 

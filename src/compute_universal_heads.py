@@ -55,6 +55,8 @@ def main():
                         help='Datasets to aggregate over (default: all abstractive datasets)')
     parser.add_argument('--no_filter', action='store_true',
                         help='Skip the ICL > majority-label filter; include all datasets')
+    parser.add_argument('--filter_only', action='store_true',
+                        help='Only run the ICL filter check and cache results; skip mean activations, IE, and aggregation')
     parser.add_argument('--root_data_dir', type=str, default='../dataset_files')
     parser.add_argument('--save_path_root', type=str, default='../results',
                         help='Root directory; per-dataset subdirs are created automatically')
@@ -93,41 +95,56 @@ def main():
         dataset = load_dataset(dataset_name, root_data_dir=args.root_data_dir,
                                test_size=args.test_split, seed=args.seed)
 
-        # Phase 1 — mean head activations
+        # Phase 1 — mean head activations (skipped in filter_only mode)
         ma_path = os.path.join(save_dir, f'{dataset_name}_mean_head_activations.pt')
-        if os.path.exists(ma_path):
-            print(f"  Loading cached mean activations from {ma_path}")
-            mean_activations = torch.load(ma_path)
-        else:
-            print(f"  Computing mean activations ({args.n_mean_trials} trials)...")
-            mean_activations = get_mean_head_activations(
-                dataset, model=model, model_config=model_config, tokenizer=tokenizer,
-                n_icl_examples=args.n_shots, N_TRIALS=args.n_mean_trials,
-                prefixes=args.prefixes, separators=args.separators,
-            )
-            torch.save(mean_activations, ma_path)
-            print(f"  Saved to {ma_path}")
+        if not args.filter_only:
+            if os.path.exists(ma_path):
+                print(f"  Loading cached mean activations from {ma_path}")
+                mean_activations = torch.load(ma_path)
+            else:
+                print(f"  Computing mean activations ({args.n_mean_trials} trials)...")
+                mean_activations = get_mean_head_activations(
+                    dataset, model=model, model_config=model_config, tokenizer=tokenizer,
+                    n_icl_examples=args.n_shots, N_TRIALS=args.n_mean_trials,
+                    prefixes=args.prefixes, separators=args.separators,
+                )
+                torch.save(mean_activations, ma_path)
+                print(f"  Saved to {ma_path}")
 
         # Phase 2 — indirect effects
         ie_path = os.path.join(save_dir, f'{dataset_name}_indirect_effect.pt')
 
         # Filter: 10-shot ICL top-1 must exceed majority-label baseline (paper criterion).
-        # If an IE file already exists it was computed after the filter passed — skip re-eval.
+        # Result is cached in a JSON file so re-runs skip the expensive ICL evaluation.
+        # If an IE file already exists it was computed after the filter passed — also skip.
         # Mean activations are always saved (needed for task-specific FV injection regardless).
+        filter_path = os.path.join(save_dir, f'{dataset_name}_filter.json')
         if not args.no_filter and not os.path.exists(ie_path):
-            outputs = dataset['valid']['output']
-            outputs_flat = [o[0] if isinstance(o, list) else str(o) for o in outputs]
-            majority_frac = Counter(outputs_flat).most_common(1)[0][1] / len(outputs_flat)
-            icl_results = n_shot_eval_no_intervention(
-                dataset, n_shots=args.n_shots, model=model, model_config=model_config,
-                tokenizer=tokenizer, prefixes=args.prefixes, separators=args.separators,
-                compute_ppl=False, test_split='valid',
-            )
-            top1_acc = dict(icl_results['clean_topk'])[1]
-            passes = top1_acc > majority_frac
-            print(f"  Filter: 10-shot={top1_acc:.3f}  majority={majority_frac:.3f}  → {'INCLUDE' if passes else 'SKIP'}")
+            if os.path.exists(filter_path):
+                with open(filter_path) as f:
+                    fdata = json.load(f)
+                passes = fdata['passes']
+                print(f"  Filter (cached): 10-shot={fdata['top1_acc']:.3f}  majority={fdata['majority_frac']:.3f}  → {'INCLUDE' if passes else 'SKIP'}")
+            else:
+                outputs = dataset['valid']['output']
+                outputs_flat = [o[0] if isinstance(o, list) else str(o) for o in outputs]
+                majority_frac = Counter(outputs_flat).most_common(1)[0][1] / len(outputs_flat)
+                icl_results = n_shot_eval_no_intervention(
+                    dataset, n_shots=args.n_shots, model=model, model_config=model_config,
+                    tokenizer=tokenizer, prefixes=args.prefixes, separators=args.separators,
+                    compute_ppl=False, test_split='valid',
+                )
+                top1_acc = dict(icl_results['clean_topk'])[1]
+                passes = top1_acc > majority_frac
+                with open(filter_path, 'w') as f:
+                    json.dump({'passes': bool(passes), 'top1_acc': float(top1_acc), 'majority_frac': float(majority_frac)}, f)
+                print(f"  Filter: 10-shot={top1_acc:.3f}  majority={majority_frac:.3f}  → {'INCLUDE' if passes else 'SKIP'}")
             if not passes:
                 continue
+
+        if args.filter_only:
+            continue  # JSON saved above; skip IE and aggregation for this dataset
+
         if os.path.exists(ie_path):
             print(f"  Loading cached indirect effects from {ie_path}")
             indirect_effect = torch.load(ie_path)
@@ -143,6 +160,10 @@ def main():
 
         # indirect_effect shape: (n_trials, n_layers, n_heads) -> mean over trials
         all_ie.append(indirect_effect.mean(dim=0))
+
+    if args.filter_only:
+        print("\nFilter-only run complete.")
+        return
 
     if not all_ie:
         print("\nNo datasets passed the ICL filter. Run with --no_filter to debug.")

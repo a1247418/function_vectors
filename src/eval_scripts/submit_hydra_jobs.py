@@ -1,5 +1,5 @@
 """
-Generate and submit SLURM jobs for the function-vector pipeline on Hydra.
+Generate and submit SLURM jobs for the function-vector pipeline.
 
 Phases
 ------
@@ -47,8 +47,33 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 # Absolute path to the function_vectors/src directory on the cluster.
-# Edit this to match your Hydra home directory.
+# Edit this to match your home directory on the target cluster.
 REPO_SRC_DIR = os.path.join(Path(__file__).resolve().parents[2], 'src')
+
+CLUSTERS = {
+    'cluster_h': {
+        'partition':  'gpu-2d',
+        'gpu_flag':   '--gpus-per-node=1',
+        'extra':      ['--exclude=head034,head022'],
+        'conda_init': 'source ~/.bashrc',
+        'conda_env':  'fv',
+    },
+    'cluster_c': {
+        'partition':  'gpu',
+        'gpu_flag':   '--gres=gpu:1',
+        'extra':      [],
+        'conda_init': 'source /etc/profile.d/conda.sh',
+        'conda_env':  'function_vectors',
+    },
+}
+
+PHASE_META = {
+    'compute_heads':  {'tpl': 'tpl_compute_heads.sh',  'mem': '128G', 'tag': 'heads'},
+    'layer_sweep':    {'tpl': 'tpl_layer_sweep.sh',    'mem': '128G', 'tag': 'sweep'},
+    'fixed_eval':     {'tpl': 'tpl_fixed_eval.sh',     'mem': '64G',  'tag': 'eval'},
+    'numheads_sweep': {'tpl': 'tpl_test_numheads.sh',  'mem': '64G',  'tag': 'numheads'},
+    'filter_check':   {'tpl': 'tpl_filter_check.sh',   'mem': '32G',  'tag': 'filter'},
+}
 
 DATASETS = [
     'antonym', 'capitalize', 'country-capital',
@@ -87,6 +112,12 @@ MODELS = {
         'new_model':   True,
         'edit_layer':  11,      # 34 layers, L/3
     },
+    'google/gemma-3-4b-pt': {
+        'nick':        'gemma3_4b_pt',
+        'n_top_heads': 15,
+        'new_model':   True,
+        'edit_layer':  11,      # 34 layers, L/3
+    },
     'Qwen/Qwen3-8B': {
         'nick':        'qwen3_8b',
         'n_top_heads': 25,
@@ -112,6 +143,25 @@ def _fill(template: str, replacements: dict) -> str:
     return result
 
 
+def _make_script(phase: str, cluster: str, replacements: dict) -> str:
+    meta = PHASE_META[phase]
+    cfg = CLUSTERS[cluster]
+    tag = meta['tag']
+    sbatch_lines = [
+        '#!/bin/bash',
+        f'#SBATCH --job-name=fv_{tag}_MODEL_NICK_DATASET',
+        f'#SBATCH --partition={cfg["partition"]}',
+        f'#SBATCH {cfg["gpu_flag"]}',
+        '#SBATCH --ntasks-per-node=4',
+        f'#SBATCH --mem={meta["mem"]}',
+        f'#SBATCH --output=logs/slurm-%j_{tag}_MODEL_NICK_DATASET.out',
+    ] + [f'#SBATCH {e}' for e in cfg['extra']]
+    conda = f'{cfg["conda_init"]}\nconda activate {cfg["conda_env"]}'
+    body = _read_template(meta['tpl'])
+    script = '\n'.join(sbatch_lines) + f'\n\n{conda}\n{body}'
+    return _fill(script, replacements)
+
+
 def _submit(script_content: str, script_path: str, dry_run: bool) -> None:
     os.makedirs(os.path.dirname(script_path), exist_ok=True)
     with open(script_path, 'w') as f:
@@ -128,8 +178,7 @@ def _submit(script_content: str, script_path: str, dry_run: bool) -> None:
 # Phases
 # ---------------------------------------------------------------------------
 
-def phase_compute_heads(job_dir: str, dry_run: bool, model_filter: set = None, dataset_filter: set = None) -> None:
-    template = _read_template('hydra_compute_heads.sh')
+def phase_compute_heads(job_dir: str, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
     for model_name, cfg in MODELS.items():
         if not cfg['new_model']:
             continue
@@ -139,7 +188,7 @@ def phase_compute_heads(job_dir: str, dry_run: bool, model_filter: set = None, d
         for dataset in ABSTRACTIVE_DATASETS:
             if dataset_filter and dataset not in dataset_filter:
                 continue
-            script = _fill(template, {
+            script = _make_script('compute_heads', cluster, {
                 'MODEL_NICK':   nick,
                 'MODEL_NAME':   model_name,
                 'DATASET':      dataset,
@@ -150,8 +199,7 @@ def phase_compute_heads(job_dir: str, dry_run: bool, model_filter: set = None, d
             print(f"  -> {path}")
 
 
-def phase_layer_sweep(job_dir: str, dry_run: bool, model_filter: set = None, dataset_filter: set = None) -> None:
-    template = _read_template('hydra_layer_sweep.sh')
+def phase_layer_sweep(job_dir: str, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -159,7 +207,7 @@ def phase_layer_sweep(job_dir: str, dry_run: bool, model_filter: set = None, dat
         for dataset in DATASETS:
             if dataset_filter and dataset not in dataset_filter:
                 continue
-            script = _fill(template, {
+            script = _make_script('layer_sweep', cluster, {
                 'MODEL_NICK':   nick,
                 'MODEL_NAME':   model_name,
                 'DATASET':      dataset,
@@ -171,8 +219,7 @@ def phase_layer_sweep(job_dir: str, dry_run: bool, model_filter: set = None, dat
             print(f"  -> {path}")
 
 
-def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, model_filter: set = None, dataset_filter: set = None) -> None:
-    template = _read_template('hydra_fixed_eval.sh')
+def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -181,7 +228,7 @@ def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, model_filte
         for dataset in DATASETS:
             if dataset_filter and dataset not in dataset_filter:
                 continue
-            script = _fill(template, {
+            script = _make_script('fixed_eval', cluster, {
                 'MODEL_NICK':   nick,
                 'MODEL_NAME':   model_name,
                 'DATASET':      dataset,
@@ -194,8 +241,29 @@ def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, model_filte
             print(f"  -> {path}")
 
 
-def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, model_filter: set = None, dataset_filter: set = None) -> None:
-    template = _read_template('hydra_test_numheads.sh')
+def phase_filter_check(job_dir: str, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
+    """Submit one lightweight job per (model, dataset) to fill in missing filter JSONs."""
+    for model_name, cfg in MODELS.items():
+        if not cfg['new_model']:
+            continue
+        nick = cfg['nick']
+        if model_filter and nick not in model_filter:
+            continue
+        for dataset in ABSTRACTIVE_DATASETS:
+            if dataset_filter and dataset not in dataset_filter:
+                continue
+            script = _make_script('filter_check', cluster, {
+                'MODEL_NICK':   nick,
+                'MODEL_NAME':   model_name,
+                'DATASET':      dataset,
+                'REPO_SRC_DIR': REPO_SRC_DIR,
+            })
+            path = os.path.join(job_dir, f'filter_{nick}_{dataset}.sh')
+            _submit(script, path, dry_run)
+            print(f"  -> {path}")
+
+
+def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -204,7 +272,7 @@ def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, model_f
         for dataset in DATASETS:
             if dataset_filter and dataset not in dataset_filter:
                 continue
-            script = _fill(template, {
+            script = _make_script('numheads_sweep', cluster, {
                 'MODEL_NICK':   nick,
                 'MODEL_NAME':   model_name,
                 'DATASET':      dataset,
@@ -234,19 +302,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--phase', required=True,
-                        choices=['compute_heads', 'layer_sweep', 'fixed_eval', 'numheads_sweep'])
+                        choices=['compute_heads', 'layer_sweep', 'fixed_eval', 'numheads_sweep', 'filter_check'])
     parser.add_argument('--edit_layers', type=str, default='',
                         help='Comma-separated nick=layer pairs, e.g. gptj=9,llama32_3b=8')
     parser.add_argument('--models', type=str, default='',
                         help='Comma-separated model nicks to run (default: all). e.g. gptj,llama32_3b')
     parser.add_argument('--datasets', type=str, default='',
                         help='Comma-separated dataset names to run (default: all). e.g. antonym,english-french')
+    parser.add_argument('--cluster', choices=list(CLUSTERS), default='cluster_h',
+                        help='Target cluster (default: cluster_h)')
     parser.add_argument('--dry_run', action='store_true',
                         help='Print sbatch commands without running them')
     args = parser.parse_args()
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
-    job_dir = os.path.join(Path(__file__).parent, 'hydra_jobs', timestamp)
+    job_dir = os.path.join(Path(__file__).parent, 'cluster_jobs', timestamp)
     os.makedirs(job_dir, exist_ok=True)
 
     # Ensure logs directory exists relative to REPO_SRC_DIR
@@ -254,6 +324,7 @@ def main():
     os.makedirs(logs_dir, exist_ok=True)
 
     print(f"Phase: {args.phase}")
+    print(f"Cluster: {args.cluster}")
     print(f"Job scripts: {job_dir}")
     print(f"Dry run: {args.dry_run}\n")
 
@@ -261,18 +332,21 @@ def main():
     dataset_filter = set(args.datasets.split(',')) if args.datasets else set()
 
     if args.phase == 'compute_heads':
-        phase_compute_heads(job_dir, args.dry_run, model_filter, dataset_filter)
+        phase_compute_heads(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     elif args.phase == 'layer_sweep':
-        phase_layer_sweep(job_dir, args.dry_run, model_filter, dataset_filter)
+        phase_layer_sweep(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     elif args.phase == 'fixed_eval':
         edit_layers = parse_edit_layers(args.edit_layers) if args.edit_layers else {}
-        phase_fixed_eval(job_dir, edit_layers, args.dry_run, model_filter, dataset_filter)
+        phase_fixed_eval(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter)
+
+    elif args.phase == 'filter_check':
+        phase_filter_check(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     elif args.phase == 'numheads_sweep':
         edit_layers = parse_edit_layers(args.edit_layers) if args.edit_layers else {}
-        phase_numheads_sweep(job_dir, edit_layers, args.dry_run, model_filter, dataset_filter)
+        phase_numheads_sweep(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     total = len(list(Path(job_dir).glob('*.sh')))
     print(f"\nSubmitted {total} job(s).")
