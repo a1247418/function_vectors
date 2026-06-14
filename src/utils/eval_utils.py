@@ -127,7 +127,7 @@ def fv_to_vocab(function_vector, model, model_config, tokenizer, n_tokens=10):
     else:
         raise ValueError(f"fv_to_vocab not implemented for model: {model_config['name_or_path']}")
     
-    d_out = decoder(function_vector.reshape(1,1,model_config['resid_dim']).to(model.device))
+    d_out = decoder(function_vector.reshape(1,1,model_config['resid_dim']).to(model.device).to(next(model.parameters()).dtype))
 
     vals, inds = torch.topk(d_out, k=n_tokens,largest=True)
     decoded_tokens = [(tokenizer.decode(x),round(y.item(), 4)) for x,y in zip(inds.squeeze(), vals.squeeze())]

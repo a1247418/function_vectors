@@ -12,11 +12,13 @@ conda env create -f fv_environment.yml
 conda activate fv
 ```
 
-The environment requires PyTorch ≥2.2.0 and `transformers>=4.51` to support all models listed below. PyTorch is installed via pip so the CUDA build is not pinned — install whichever `cu1xx` wheel matches your driver if the default does not work:
+The environment requires PyTorch ≥2.2.0 and `transformers>=4.51` to support all models listed below. PyTorch is installed via pip so the CUDA build is not pinned — the wheel must match your driver. Check with `nvidia-smi` and pick accordingly:
 ```bash
-pip install torch==2.2.0 --index-url https://download.pytorch.org/whl/cu118  # CUDA 11.8
-pip install torch==2.2.0 --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu118  # driver ≥ 11.8
+pip install torch --index-url https://download.pytorch.org/whl/cu121  # driver ≥ 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu124  # driver ≥ 12.4
 ```
+If torch is already installed with the wrong CUDA version, add `--force-reinstall` and also reinstall `torchvision`, `numpy`, `pandas`, `scikit-learn` to avoid ABI mismatches.
 
 ### HuggingFace access
 
@@ -196,7 +198,7 @@ All summary scripts are in `src/eval_scripts/` and should be run from `src/`.
 ```bash
 python eval_scripts/summarize_results.py --results_root ../results
 ```
-Prints three tables (zero-shot+FV, shuffled-label+FV, ICL baseline) and saves to `results/summary.txt`.
+Prints five tables (zero-shot+FV, shuffled-label+FV, ICL baseline, BL-FV zero-shot, BL-FV shuffled) and saves to `results/summary.txt`. The two BL-FV tables use the best injection layer per model (highest mean accuracy across datasets from the layer sweep); they appear automatically once layer sweep results exist, with no additional jobs required.
 
 **`summarize_layer_sweep.py`** — per-layer accuracy after the layer sweep, useful for picking the best injection layer:
 ```bash

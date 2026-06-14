@@ -8,6 +8,10 @@ Looks for files matching:
     <results_root>/<model_nick>/<dataset>/zs_results_editlayer_*.json
     <results_root>/<model_nick>/<dataset>/fs_shuffled_results_editlayer_*.json
     <results_root>/<model_nick>/<dataset>/model_baseline.json
+
+Also prints BL-FV sections (best-layer baseline) from layer sweep files:
+    <results_root>/<model_nick>/<dataset>/zs_results_layer_sweep.json
+    <results_root>/<model_nick>/<dataset>/fs_shuffled_results_layer_sweep.json
 """
 import os, json, glob, argparse
 import numpy as np
@@ -30,11 +34,48 @@ def find_fixed_layer_file(directory, prefix):
     return matches[-1] if matches else None  # take the most recent if multiple
 
 
+def find_best_layer(model_dir, datasets):
+    """Return the layer with highest mean ZS accuracy across datasets (from layer sweep)."""
+    layer_avgs = {}
+    for dataset in datasets:
+        path = os.path.join(model_dir, dataset, 'zs_results_layer_sweep.json')
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            data = json.load(f)
+        for k, v in data.items():
+            acc = top1(v.get('intervention_rank_list', []))
+            if not np.isnan(acc):
+                layer_avgs.setdefault(int(k), []).append(acc)
+    if not layer_avgs:
+        return None
+    return max(layer_avgs, key=lambda l: np.mean(layer_avgs[l]))
+
+
+def acc_at_layer(model_dir, dataset, sweep_prefix, layer, key='intervention_rank_list'):
+    """Read accuracy for a specific layer from a layer-sweep JSON."""
+    if layer is None:
+        return float('nan')
+    path = os.path.join(model_dir, dataset, f'{sweep_prefix}.json')
+    if not os.path.exists(path):
+        return float('nan')
+    with open(path) as f:
+        data = json.load(f)
+    entry = data.get(str(layer)) or data.get(layer)
+    return top1(entry.get(key, [])) if entry else float('nan')
+
+
 def summarize(results_root):
     model_nicks = sorted(
         d for d in os.listdir(results_root)
         if os.path.isdir(os.path.join(results_root, d))
     )
+
+    # Pre-compute best injection layer per model from layer sweep results
+    best_layers = {
+        nick: find_best_layer(os.path.join(results_root, nick), DATASETS)
+        for nick in model_nicks
+    }
 
     col_w = 16
     header = f"{'Dataset':<20}" + "".join(f"{n:>{col_w}}" for n in model_nicks)
@@ -83,6 +124,38 @@ def summarize(results_root):
         for nick in model_nicks:
             vals = [v for v in accs[nick] if not np.isnan(v)]
             avg_row += f"{round(np.mean(vals), 1) if vals else float('nan'):>{col_w}}"
+        lines.append(avg_row)
+
+    # BL-FV sections: inject at the best layer found by the layer sweep
+    for label, sweep_prefix, key in [
+        ("BL-FV Zero-Shot (accuracy %)",      "zs_results_layer_sweep",         "intervention_rank_list"),
+        ("BL-FV Shuffled-Label (accuracy %)", "fs_shuffled_results_layer_sweep", "intervention_rank_list"),
+    ]:
+        lines.append(f"\n{'='*len(header)}")
+        lines.append(label)
+        lines.append(header)
+        lines.append('-' * len(header))
+
+        accs = {nick: [] for nick in model_nicks}
+
+        for dataset in DATASETS:
+            row = f"{dataset:<20}"
+            for nick in model_nicks:
+                model_dir = os.path.join(results_root, nick)
+                acc = acc_at_layer(model_dir, dataset, sweep_prefix, best_layers[nick], key)
+                accs[nick].append(acc)
+                row += f"{acc:>{col_w}}" if not np.isnan(acc) else f"{'—':>{col_w}}"
+            lines.append(row)
+
+        lines.append('-' * len(header))
+        avg_row = f"{'AVERAGE':<20}"
+        for nick in model_nicks:
+            vals = [v for v in accs[nick] if not np.isnan(v)]
+            bl = best_layers[nick]
+            label_suffix = f"L={bl}" if bl is not None else "no sweep"
+            avg_val = round(np.mean(vals), 1) if vals else float('nan')
+            cell = f"{avg_val} ({label_suffix})"
+            avg_row += f"{cell:>{col_w}}"
         lines.append(avg_row)
 
     output = "\n".join(lines)

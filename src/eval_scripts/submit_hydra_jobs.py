@@ -61,7 +61,7 @@ CLUSTERS = {
     'cluster_c': {
         'partition':  'gpu',
         'gpu_flag':   '--gres=gpu:1',
-        'extra':      [],
+        'extra':      ['--time=2-00:00:00'],
         'conda_init': 'source /etc/profile.d/conda.sh',
         'conda_env':  'fv',
     },

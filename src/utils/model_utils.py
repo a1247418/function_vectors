@@ -153,7 +153,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
     elif 'qwen' in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map=device)
 
         MODEL_CONFIG = {"n_heads":         model.config.num_attention_heads,
                         "n_layers":        model.config.num_hidden_layers,
