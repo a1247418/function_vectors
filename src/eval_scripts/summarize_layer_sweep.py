@@ -9,7 +9,12 @@ Usage (from src/):
 import os, json, glob, argparse
 import numpy as np
 
-DATASETS = ['antonym', 'capitalize', 'country-capital', 'english-french', 'present-past', 'singular-plural']
+DATASETS = [
+    'capitalize', 'country-capital', 'english-french', 'present-past',
+    'sentiment', 'product-company',
+    'fruit_v_animal_3', 'color_v_animal_3', 'object_v_concept_3',
+    'choose_first_of_3', 'adjective_v_verb_3', 'choose_middle_of_3',
+]
 
 
 def top1(rank_list):

@@ -76,8 +76,10 @@ PHASE_META = {
 }
 
 DATASETS = [
-    'antonym', 'capitalize', 'country-capital',
-    'english-french', 'present-past', 'singular-plural',
+    'capitalize', 'country-capital', 'english-french', 'present-past',
+    'sentiment', 'product-company',
+    'fruit_v_animal_3', 'color_v_animal_3', 'object_v_concept_3',
+    'choose_first_of_3', 'adjective_v_verb_3', 'choose_middle_of_3',
 ]
 
 # Full abstractive task set used for AIE aggregation (compute_heads phase).
