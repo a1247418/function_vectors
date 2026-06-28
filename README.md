@@ -163,7 +163,7 @@ The script uses the following per-model configuration (edit `MODELS` dict to add
 |---|---|---|---|---|
 | GPT-J 6B | `gptj` | 28 | 10 | 9 |
 | Llama-3.2 3B Instruct | `llama32_3b` | 28 | 15 | 9 |
-| Gemma-3 4B PT | `gemma3_4b_pt` | 34 | 15 | 11 |
+| Gemma-3 4B PT | `gemma3_4b_pt` | 34 | 20 | 11 |
 | Gemma-3 4B IT | `gemma3_4b` | 34 | 20 | 11 |
 | Qwen3 8B | `qwen3_8b` | 36 | 25 | 12 |
 

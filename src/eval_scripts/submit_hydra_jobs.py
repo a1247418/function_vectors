@@ -116,7 +116,7 @@ MODELS = {
     },
     'google/gemma-3-4b-pt': {
         'nick':        'gemma3_4b_pt',
-        'n_top_heads': 15,
+        'n_top_heads': 20,
         'new_model':   True,
         'edit_layer':  11,      # 34 layers, L/3
     },
