@@ -35,6 +35,7 @@ if __name__ == "__main__":
     parser.add_argument('--generate_str', help='Whether to generate long-form completions for the task', action='store_true', required=False)
     parser.add_argument("--metric", help="Metric to use when evaluating generated strings", type=str, required=False, default="f1_score")
     parser.add_argument("--universal_set", help="Flag for whether to evaluate using the univeral set of heads", action="store_true", required=False)
+    parser.add_argument("--no_filter", help="Evaluate the FV on ALL test samples instead of only ICL-correct ones (for fair comparison against methods evaluated without filtering)", action="store_true", required=False)
     parser.add_argument('--revision', help='Specify model checkpoints for pythia or olmo models', type=str, required=False, default=None)
         
     args = parser.parse_args()  
@@ -115,6 +116,15 @@ if __name__ == "__main__":
     with open(fs_results_file_name, 'w') as results_file:
         json.dump(fs_results, results_file, indent=2)
 
+    # Optionally evaluate on the entire test split rather than only the ICL-correct
+    # instances. Passing None lets n_shot_eval fall back to all test indices. The FV
+    # itself is still built from the filtered validation set (filter_set_validation);
+    # only the evaluation denominator changes.
+    if args.no_filter:
+        print(f"[no_filter] Evaluating on ALL {len(dataset['test'])} test samples "
+              f"(instead of {len(filter_set)} ICL-correct ones)")
+        filter_set = None
+
     set_seed(seed)
     # Load or Re-Compute mean_head_activations
     if mean_activations_path is not None and os.path.exists(mean_activations_path):
@@ -153,7 +163,8 @@ if __name__ == "__main__":
     # --- Diagnostics ---
     print(f"[DIAG] model class: {type(model).__name__}, has language_model: {hasattr(model, 'language_model')}")
     print(f"[DIAG] model_config: {model_config}")
-    print(f"[DIAG] filter_set size: {len(filter_set)} / {len(dataset['test'])} test examples")
+    _n_eval = len(dataset['test']) if filter_set is None else len(filter_set)
+    print(f"[DIAG] filter_set size: {_n_eval} / {len(dataset['test'])} test examples")
     print(f"[DIAG] mean_activations shape: {mean_activations.shape}, norm: {mean_activations.norm().item():.4f}")
     print(f"[DIAG] fv shape: {fv.shape}, dtype: {fv.dtype}, norm: {fv.norm().item():.6f}")
     try:
