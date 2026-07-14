@@ -6,19 +6,20 @@ import random
 from typing import *
 
 
-def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
+def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None, dtype=None):
     """
     Loads a huggingface model and its tokenizer
 
     Parameters:
     model_name: huggingface name of the model to load (e.g. GPTJ: "EleutherAI/gpt-j-6B", or "EleutherAI/gpt-j-6b")
     device: 'cuda' or 'cpu'
-    
+    dtype: optional torch dtype (e.g. torch.float32) to override this function's per-model default dtype
+
     Returns:
     model: huggingface model
     tokenizer: huggingface tokenizer
     MODEL_CONFIG: config variables w/ standardized names
-    
+
     """
     assert model_name is not None
 
@@ -56,9 +57,9 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
         if revision is not None and 'pythia' in model_name.lower():
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, revision=revision).to(device)
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.float16, revision=revision).to(device)
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to(device)
+            model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.float16).to(device)
 
         MODEL_CONFIG={"n_heads":model.config.num_attention_heads,
                       "n_layers":model.config.num_hidden_layers,
@@ -72,7 +73,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
     elif 'gemma' in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True).to(device)
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.bfloat16, low_cpu_mem_usage=True).to(device)
 
         # Gemma-3 multimodal (4B+) loads as Gemma3ForConditionalGeneration: text layers at model.language_model.layers
         # Gemma-3 1B text-only loads as Gemma3ForCausalLM: text layers at model.layers
@@ -112,7 +113,9 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
                     quantization_config=bnb_config
             )
         else:
-            if '7b' in model_name.lower() or '8b' in model_name.lower():
+            if dtype is not None:
+                model_dtype = dtype
+            elif '7b' in model_name.lower() or '8b' in model_name.lower():
                 model_dtype = torch.float32
             else: #half precision for bigger llama models
                 model_dtype = torch.float16
@@ -153,7 +156,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
     elif 'qwen' in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map=device)
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.float16, device_map=device)
 
         MODEL_CONFIG = {"n_heads":         model.config.num_attention_heads,
                         "n_layers":        model.config.num_hidden_layers,
