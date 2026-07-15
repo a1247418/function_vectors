@@ -162,7 +162,9 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None):
                         "name_or_path":    model.config._name_or_path,
                         "attn_hook_names": [f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
                         "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
-                        "prepend_bos":     False}
+                        "prepend_bos":     False,
+                        # Qwen has no BOS and treats <|endoftext|> as end-of-document/padding;
+                        "prepend_bos_text": False}
 
     else:
         raise NotImplementedError("Still working to get this model available!")

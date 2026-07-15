@@ -116,7 +116,7 @@ def compute_indirect_effect(dataset, mean_activations, model, model_config, toke
         dummy_gt_labels = get_dummy_token_labels(n_shots, tokenizer=tokenizer, model_config=model_config)
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos = False if model_config['prepend_bos'] else True
+    prepend_bos = model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
     if last_token_only:
         indirect_effect = torch.zeros(n_trials,model_config['n_layers'], model_config['n_heads'])
