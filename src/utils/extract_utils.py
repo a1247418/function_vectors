@@ -78,7 +78,7 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
         filter_set = np.arange(len(dataset['valid']))
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos =  model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
     for n in range(N_TRIALS):
         word_pairs = dataset['train'][np.random.choice(len(dataset['train']),n_icl_examples, replace=False)]
@@ -159,7 +159,7 @@ def get_mean_layer_activations(dataset, model, model_config, tokenizer, n_icl_ex
         filter_set = np.arange(len(dataset['valid']))
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos =  model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
     for n in range(N_TRIALS):
         word_pairs = dataset['train'][np.random.choice(len(dataset['train']),n_icl_examples, replace=False)]
@@ -239,7 +239,7 @@ def get_token_averaged_attention(dataset, model, model_config, tokenizer, n_shot
             word_pairs = dataset['train'][np.random.choice(len(dataset['train']),n_shots, replace=False)]
         
         # If the model already prepends a bos token by default, we don't want to add one
-        add_bos =  False if model_config['prepend_bos'] else True
+        add_bos =  model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
         word_pairs_test = dataset['valid'][s]
         prompt_data = word_pairs_to_prompt_data(word_pairs, query_target_pair=word_pairs_test, prepend_bos_token = add_bos)

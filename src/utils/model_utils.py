@@ -71,8 +71,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None, d
                       "prepend_bos":False}
         
     elif 'gemma' in model_name.lower():
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = AutoTokenizer.from_pretrained(model_name)  # ships a dedicated <pad> token; don't override
         model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.bfloat16, low_cpu_mem_usage=True).to(device)
 
         # Gemma-3 multimodal (4B+) loads as Gemma3ForConditionalGeneration: text layers at model.language_model.layers
@@ -154,8 +153,7 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None, d
                       "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
                       "prepend_bos":False}
     elif 'qwen' in model_name.lower():
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = AutoTokenizer.from_pretrained(model_name)  # ships pad=<|endoftext|>; don't override
         model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype or torch.float16, device_map=device)
 
         MODEL_CONFIG = {"n_heads":         model.config.num_attention_heads,
@@ -165,7 +163,9 @@ def load_gpt_model_and_tokenizer(model_name:str, device='cuda', revision=None, d
                         "name_or_path":    model.config._name_or_path,
                         "attn_hook_names": [f'model.layers.{layer}.self_attn.o_proj' for layer in range(model.config.num_hidden_layers)],
                         "layer_hook_names":[f'model.layers.{layer}' for layer in range(model.config.num_hidden_layers)],
-                        "prepend_bos":     False}
+                        "prepend_bos":     False,
+                        # Qwen has no BOS and treats <|endoftext|> as end-of-document/padding;
+                        "prepend_bos_text": False}
 
     else:
         raise NotImplementedError("Still working to get this model available!")

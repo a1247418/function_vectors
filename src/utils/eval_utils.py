@@ -251,7 +251,7 @@ def n_shot_eval(dataset, fv_vector, edit_layer: int, n_shots: int, model, model_
         intervention_score_list = []
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos =  model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
     if filter_set is None:
         filter_set = np.arange(len(dataset['test']))
@@ -375,7 +375,7 @@ def n_shot_eval_no_intervention(dataset, n_shots, model, model_config, tokenizer
         score_list = []
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos =  model_config.get('prepend_bos_text', not model_config['prepend_bos'])
 
     if pred_filepath:
         pred_file = open(pred_filepath, 'w')
