@@ -8,4 +8,4 @@ python evaluate_function_vector.py \
     --n_top_heads N_TOP_HEADS \
     --edit_layer EDIT_LAYER \
     --universal_set \
-    --seed 42
+    --seed 42 EXTRA_FLAGS DTYPE_FLAG

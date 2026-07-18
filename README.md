@@ -123,7 +123,7 @@ python src/evaluate_function_vector.py \
 
 ## SLURM Batch Jobs
 
-`src/eval_scripts/submit_hydra_jobs.py` generates and submits all three phases as SLURM jobs.
+`src/eval_scripts/submit_slurm_jobs.py` generates and submits all three phases as SLURM jobs.
 
 ### Cluster selection
 
@@ -131,29 +131,31 @@ Pass `--cluster cluster_h` (default) or `--cluster cluster_c` to target the appr
 
 ```bash
 # Phase 1 — compute universal heads for new models (one job per model)
-python src/eval_scripts/submit_hydra_jobs.py --phase compute_heads --cluster cluster_c
+python src/eval_scripts/submit_slurm_jobs.py --phase compute_heads --cluster cluster_c
 
 # Phase 2 — layer sweep for all models × datasets (one job per pair)
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c
+python src/eval_scripts/submit_slurm_jobs.py --phase layer_sweep --cluster cluster_c
 
 # Phase 3 — fixed-layer eval using hardcoded L/3 defaults (no flag needed)
-python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval --cluster cluster_c
+python src/eval_scripts/submit_slurm_jobs.py --phase fixed_eval --cluster cluster_c
 
 # Or override specific models after inspecting layer sweep results
-python src/eval_scripts/submit_hydra_jobs.py --phase fixed_eval --cluster cluster_c \
+python src/eval_scripts/submit_slurm_jobs.py --phase fixed_eval --cluster cluster_c \
     --edit_layers gptj=9,llama32_3b=9,gemma3_4b=11,qwen3_8b=12
 
 # n_heads sweep — find the optimal number of heads per model × dataset
-python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep --cluster cluster_c \
+python src/eval_scripts/submit_slurm_jobs.py --phase numheads_sweep --cluster cluster_c \
     --edit_layers gemma3_4b=11 --models gemma3_4b
 
 # Dry run — print sbatch commands without submitting
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c --dry_run
+python src/eval_scripts/submit_slurm_jobs.py --phase layer_sweep --cluster cluster_c --dry_run
 ```
+
+**Note — default filtering differs from the original paper.** Todd et al. (2024) report FV accuracy only on test samples the model already answers correctly with 10-shot ICL ("filtered"). The `layer_sweep`, `fixed_eval` and `numheads_sweep` phases here pass `--no_filter` by default, i.e. FV accuracy is measured on **all** test samples — a stricter measure, so numbers are not directly comparable to the paper's and will generally be lower. Pass `--filtered` to restore the paper protocol. (The standalone eval scripts, run without the SLURM driver, still default to filtered.)
 
 Filter flags `--models` and `--datasets` accept comma-separated values and apply to all phases:
 ```bash
-python src/eval_scripts/submit_hydra_jobs.py --phase layer_sweep --cluster cluster_c \
+python src/eval_scripts/submit_slurm_jobs.py --phase layer_sweep --cluster cluster_c \
     --models gemma3_4b --datasets antonym,english-french
 ```
 
@@ -186,7 +188,7 @@ python src/test_numheads.py \
 Results are saved to `results/<model_nick>/<model_nick>_test_numheads/<dataset>_perf_v_heads.json`. Submit as SLURM jobs across all datasets with:
 
 ```bash
-python src/eval_scripts/submit_hydra_jobs.py --phase numheads_sweep --cluster cluster_c \
+python src/eval_scripts/submit_slurm_jobs.py --phase numheads_sweep --cluster cluster_c \
     --edit_layers gemma3_4b=11 --models gemma3_4b
 ```
 

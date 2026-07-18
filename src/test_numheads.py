@@ -29,6 +29,8 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=str, required=False,
                         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--revision', type=str, required=False, default=None)
+    parser.add_argument('--no_filter', action='store_true', required=False,
+                        help='Evaluate the FV on ALL test samples instead of only ICL-correct ones')
 
     args = parser.parse_args()
 
@@ -50,6 +52,9 @@ if __name__ == "__main__":
     )
     filter_set = np.where(np.array(fs_results['clean_rank_list']) == 0)[0]
     print(f"Sanity check — 10-shot topk: {fs_results['clean_topk']}, filter_set size: {len(filter_set)}")
+    if args.no_filter:
+        print(f"[no_filter] Evaluating on ALL {len(dataset['test'])} test samples")
+        filter_set = None
 
     zs_results = {}
     for i in range(1, args.n_heads + 1):

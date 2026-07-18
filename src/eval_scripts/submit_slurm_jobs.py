@@ -21,21 +21,21 @@ numheads_sweep  Run test_numheads.py to find the optimal n_top_heads for each
 Usage
 -----
 # Phase 1 — compute universal heads for new models
-python submit_hydra_jobs.py --phase compute_heads
+python submit_slurm_jobs.py --phase compute_heads
 
 # Phase 2 — layer sweep for all models × datasets
-python submit_hydra_jobs.py --phase layer_sweep
+python submit_slurm_jobs.py --phase layer_sweep
 
 # Phase 3 — fixed-layer eval (after inspecting sweep results)
-python submit_hydra_jobs.py --phase fixed_eval \\
+python submit_slurm_jobs.py --phase fixed_eval \\
     --edit_layers gptj=9,llama32_3b=8,gemma3_4b=12,qwen3_8b=16
 
 # n_heads sweep (find optimal number of heads)
-python submit_hydra_jobs.py --phase numheads_sweep \\
+python submit_slurm_jobs.py --phase numheads_sweep \\
     --edit_layers gemma3_4b=11 --models gemma3_4b
 
 # Dry run (print commands without submitting)
-python submit_hydra_jobs.py --phase layer_sweep --dry_run
+python submit_slurm_jobs.py --phase layer_sweep --dry_run
 """
 import os
 import argparse
@@ -61,7 +61,7 @@ CLUSTERS = {
     'cluster_c': {
         'partition':  'gpu',
         'gpu_flag':   '--gres=gpu:1',
-        'extra':      ['--time=2-00:00:00'],
+        'extra':      ['--time=2-00:00:00', '--exclude=s-sc-gpu018'],
         'conda_init': 'source /etc/profile.d/conda.sh',
         'conda_env':  'fv',
     },
@@ -95,6 +95,9 @@ ABSTRACTIVE_DATASETS = [
     'sentiment', 'singular-plural', 'synonym', 'word_length',
 ]
 
+# The --dtype CLI flag injects a 'dtype' override into every selected model
+# config and suffixes its nick / results dir (e.g. llama32_3b -> llama32_3b_fp32).
+# It is plumbed through to evaluate_function_vector.py in the eval phases only.
 MODELS = {
     'EleutherAI/gpt-j-6b': {
         'nick':        'gptj',
@@ -105,7 +108,7 @@ MODELS = {
     'meta-llama/Llama-3.2-3B-Instruct': {
         'nick':        'llama32_3b',
         'n_top_heads': 15,
-        'new_model':   True,
+        'new_model':   False,   # universal heads already hardcoded
         'edit_layer':  9,       # 28 layers, L/3
     },
     'google/gemma-3-4b-it': {
@@ -127,6 +130,13 @@ MODELS = {
         'edit_layer':  12,      # 36 layers, L/3
     },
 }
+
+
+DTYPE_SUFFIX = {'float32': 'fp32', 'float16': 'fp16', 'bfloat16': 'bf16'}
+
+
+def _dtype_flag(cfg: dict) -> str:
+    return f"--dtype {cfg['dtype']}" if cfg.get('dtype') else ''
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,7 +211,8 @@ def phase_compute_heads(job_dir: str, dry_run: bool, cluster: str, model_filter:
             print(f"  -> {path}")
 
 
-def phase_layer_sweep(job_dir: str, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
+def phase_layer_sweep(job_dir: str, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None, no_filter: bool = False) -> None:
+    extra_flags = '--no_filter' if no_filter else ''
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -215,13 +226,16 @@ def phase_layer_sweep(job_dir: str, dry_run: bool, cluster: str, model_filter: s
                 'DATASET':      dataset,
                 'N_TOP_HEADS':  cfg['n_top_heads'],
                 'REPO_SRC_DIR': REPO_SRC_DIR,
+                'EXTRA_FLAGS':  extra_flags,
+                'DTYPE_FLAG':   _dtype_flag(cfg),
             })
             path = os.path.join(job_dir, f'sweep_{nick}_{dataset}.sh')
             _submit(script, path, dry_run)
             print(f"  -> {path}")
 
 
-def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
+def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None, no_filter: bool = False) -> None:
+    extra_flags = '--no_filter' if no_filter else ''
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -237,6 +251,8 @@ def phase_fixed_eval(job_dir: str, edit_layers: dict, dry_run: bool, cluster: st
                 'N_TOP_HEADS':  cfg['n_top_heads'],
                 'EDIT_LAYER':   layer,
                 'REPO_SRC_DIR': REPO_SRC_DIR,
+                'EXTRA_FLAGS':  extra_flags,
+                'DTYPE_FLAG':   _dtype_flag(cfg),
             })
             path = os.path.join(job_dir, f'eval_{nick}_{dataset}_layer{layer}.sh')
             _submit(script, path, dry_run)
@@ -265,7 +281,8 @@ def phase_filter_check(job_dir: str, dry_run: bool, cluster: str, model_filter: 
             print(f"  -> {path}")
 
 
-def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None) -> None:
+def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, cluster: str, model_filter: set = None, dataset_filter: set = None, no_filter: bool = False, max_heads: int = None) -> None:
+    extra_flags = '--no_filter' if no_filter else ''
     for model_name, cfg in MODELS.items():
         nick = cfg['nick']
         if model_filter and nick not in model_filter:
@@ -278,9 +295,10 @@ def phase_numheads_sweep(job_dir: str, edit_layers: dict, dry_run: bool, cluster
                 'MODEL_NICK':   nick,
                 'MODEL_NAME':   model_name,
                 'DATASET':      dataset,
-                'N_TOP_HEADS':  cfg['n_top_heads'],
+                'N_TOP_HEADS':  max_heads or cfg['n_top_heads'],
                 'EDIT_LAYER':   layer,
                 'REPO_SRC_DIR': REPO_SRC_DIR,
+                'EXTRA_FLAGS':  extra_flags,
             })
             path = os.path.join(job_dir, f'numheads_{nick}_{dataset}.sh')
             _submit(script, path, dry_run)
@@ -315,7 +333,30 @@ def main():
                         help='Target cluster (default: cluster_h)')
     parser.add_argument('--dry_run', action='store_true',
                         help='Print sbatch commands without running them')
+    parser.add_argument('--no_filter', action='store_true', default=True,
+                        help='Pass --no_filter to evaluate_function_vector.py (eval on all test '
+                             'samples). This is the default; use --filtered to disable.')
+    parser.add_argument('--filtered', dest='no_filter', action='store_false',
+                        help='Evaluate only on ICL-correct test samples (the original paper protocol)')
+    parser.add_argument('--max_heads', type=int, default=None,
+                        help='numheads_sweep only: sweep upper bound for n_heads '
+                             '(default: each model\'s n_top_heads from MODELS)')
+    parser.add_argument('--dtype', choices=list(DTYPE_SUFFIX), default=None,
+                        help='Override the model dtype for eval jobs; nicks and results dirs '
+                             'get a matching suffix (e.g. llama32_3b -> llama32_3b_fp32)')
     args = parser.parse_args()
+
+    if args.max_heads and args.phase != 'numheads_sweep':
+        parser.error('--max_heads only applies to the numheads_sweep phase')
+
+    if args.dtype:
+        if args.phase not in ('layer_sweep', 'fixed_eval'):
+            parser.error('--dtype is only plumbed through for layer_sweep and fixed_eval '
+                         '(universal heads are treated as hardcoded, independent of dtype)')
+        suffix = DTYPE_SUFFIX[args.dtype]
+        for cfg in MODELS.values():
+            cfg['dtype'] = args.dtype
+            cfg['nick'] = f"{cfg['nick']}_{suffix}"
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
     job_dir = os.path.join(Path(__file__).parent, 'cluster_jobs', timestamp)
@@ -333,22 +374,28 @@ def main():
     model_filter  = set(args.models.split(','))  if args.models  else set()
     dataset_filter = set(args.datasets.split(',')) if args.datasets else set()
 
+    # --models and --edit_layers take base nicks; align them with the suffixed ones
+    if args.dtype:
+        model_filter = {f"{m}_{suffix}" for m in model_filter}
+
     if args.phase == 'compute_heads':
         phase_compute_heads(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     elif args.phase == 'layer_sweep':
-        phase_layer_sweep(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
+        phase_layer_sweep(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter, no_filter=args.no_filter)
 
     elif args.phase == 'fixed_eval':
         edit_layers = parse_edit_layers(args.edit_layers) if args.edit_layers else {}
-        phase_fixed_eval(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter)
+        if args.dtype:
+            edit_layers = {f"{nick}_{suffix}": layer for nick, layer in edit_layers.items()}
+        phase_fixed_eval(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter, no_filter=args.no_filter)
 
     elif args.phase == 'filter_check':
         phase_filter_check(job_dir, args.dry_run, args.cluster, model_filter, dataset_filter)
 
     elif args.phase == 'numheads_sweep':
         edit_layers = parse_edit_layers(args.edit_layers) if args.edit_layers else {}
-        phase_numheads_sweep(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter)
+        phase_numheads_sweep(job_dir, edit_layers, args.dry_run, args.cluster, model_filter, dataset_filter, no_filter=args.no_filter, max_heads=args.max_heads)
 
     total = len(list(Path(job_dir).glob('*.sh')))
     print(f"\nSubmitted {total} job(s).")

@@ -15,6 +15,7 @@ Also prints BL-FV sections (best-layer baseline) from layer sweep files:
 """
 import os, json, glob, argparse
 import numpy as np
+import pandas as pd
 
 DATASETS = [
     'capitalize', 'country-capital', 'english-french', 'present-past',
@@ -86,12 +87,15 @@ def summarize(results_root):
     header = f"{'Dataset':<20}" + "".join(f"{n:>{col_w}}" for n in model_nicks)
 
     lines = []
+    records = []
 
-    for label, prefix, key in [
-        ("Zero-Shot + FV (accuracy %)",     "zs_results",          "intervention_rank_list"),
-        ("Shuffled-Label + FV (accuracy %)", "fs_shuffled_results", "intervention_rank_list"),
-        ("ICL Baseline (accuracy %)",        "model_baseline",      "clean_rank_list"),
-    ]:
+    CONDITION_KEYS = [
+        ('zs_fv',        "Zero-Shot + FV (accuracy %)",     "zs_results",          "intervention_rank_list"),
+        ('shuffled_fv',  "Shuffled-Label + FV (accuracy %)", "fs_shuffled_results", "intervention_rank_list"),
+        ('icl_baseline', "ICL Baseline (accuracy %)",        "model_baseline",      "clean_rank_list"),
+    ]
+
+    for condition, label, prefix, key in CONDITION_KEYS:
         lines.append(f"\n{'='*len(header)}")
         lines.append(label)
         lines.append(header)
@@ -111,7 +115,6 @@ def summarize(results_root):
                 if fpath and os.path.exists(fpath):
                     data = load_json(fpath)
                     if prefix == "model_baseline":
-                        # keyed by shot count; use the highest available
                         shot_key = str(max(int(k) for k in data.keys()))
                         ranks = data[shot_key].get(key, [])
                     else:
@@ -120,8 +123,10 @@ def summarize(results_root):
                     accs[nick].append(acc)
                     row += f"{acc:>{col_w}}"
                 else:
-                    accs[nick].append(float('nan'))
+                    acc = float('nan')
+                    accs[nick].append(acc)
                     row += f"{'—':>{col_w}}"
+                records.append({'dataset': dataset, 'model': nick, 'condition': condition, 'accuracy': acc})
             lines.append(row)
 
         lines.append('-' * len(header))
@@ -132,10 +137,12 @@ def summarize(results_root):
         lines.append(avg_row)
 
     # BL-FV sections: inject at the best layer found by the layer sweep
-    for label, sweep_prefix, key in [
-        ("BL-FV Zero-Shot (accuracy %)",      "zs_results_layer_sweep",         "intervention_rank_list"),
-        ("BL-FV Shuffled-Label (accuracy %)", "fs_shuffled_results_layer_sweep", "intervention_rank_list"),
-    ]:
+    BL_KEYS = [
+        ('bl_fv_zs',       "BL-FV Zero-Shot (accuracy %)",      "zs_results_layer_sweep",         "intervention_rank_list"),
+        ('bl_fv_shuffled', "BL-FV Shuffled-Label (accuracy %)", "fs_shuffled_results_layer_sweep", "intervention_rank_list"),
+    ]
+
+    for condition, label, sweep_prefix, key in BL_KEYS:
         lines.append(f"\n{'='*len(header)}")
         lines.append(label)
         lines.append(header)
@@ -150,6 +157,7 @@ def summarize(results_root):
                 acc = acc_at_layer(model_dir, dataset, sweep_prefix, best_layers[nick], key)
                 accs[nick].append(acc)
                 row += f"{acc:>{col_w}}" if not np.isnan(acc) else f"{'—':>{col_w}}"
+                records.append({'dataset': dataset, 'model': nick, 'condition': condition, 'accuracy': acc})
             lines.append(row)
 
         lines.append('-' * len(header))
@@ -170,6 +178,12 @@ def summarize(results_root):
     with open(out_path, 'w') as f:
         f.write(output + "\n")
     print(f"\nSaved to {out_path}")
+
+    df = pd.DataFrame(records).pivot(index=['dataset', 'model'], columns='condition', values='accuracy').reset_index()
+    df = df[['dataset', 'model', 'icl_baseline', 'zs_fv', 'shuffled_fv', 'bl_fv_zs', 'bl_fv_shuffled']]
+    csv_path = os.path.join(results_root, 'summary.csv')
+    df.to_csv(csv_path, index=False)
+    print(f"Saved to {csv_path}")
 
 
 def main():

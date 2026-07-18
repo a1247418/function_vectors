@@ -8,4 +8,4 @@ python test_numheads.py \
     --save_path_root ../results/MODEL_NICK \
     --edit_layer EDIT_LAYER \
     --n_heads N_TOP_HEADS \
-    --seed 42
+    --seed 42 EXTRA_FLAGS
